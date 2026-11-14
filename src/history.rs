@@ -1,5 +1,6 @@
-//! Dernière analyse : enregistrée sur disque pour être rechargée au lancement
-//! et comparée à la suivante (dossiers qui ont grossi ou diminué).
+//! Analyses enregistrées : une par lecteur ou dossier analysé, rechargées au lancement
+//! ou en cliquant sur un lecteur, et comparées à l'analyse suivante de la même cible
+//! (dossiers qui ont grossi ou diminué). Fichiers : `%APPDATA%\DiskScan\data\scans\`.
 //!
 //! Format texte, une ligne par élément, champs séparés par des tabulations :
 //! - en-tête : `diskscan-scan-1`, racine, date, durée (ms), interrompue (0/1), comparée (0/1)
@@ -30,8 +31,63 @@ const MAGIC: &str = "diskscan-scan-1";
 /// Indicateurs conservés d'une analyse à l'autre.
 const KEPT_FLAGS: u8 = flag::LINK | flag::DENIED | flag::PENDING;
 
-fn path() -> Option<PathBuf> {
-    Some(eframe::storage_dir("DiskScan")?.join("last_scan.tsv"))
+/// Nombre maximal d'analyses gardées (les plus anciennes sont oubliées).
+const KEEP: usize = 30;
+
+/// Résumé d'une analyse enregistrée, lu sans charger tout le fichier.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedInfo {
+    pub root: String,
+    pub when: i64,
+    pub size: u64,
+    pub alloc: u64,
+}
+
+fn data_dir() -> Option<PathBuf> {
+    eframe::storage_dir("DiskScan")
+}
+
+/// Clé d'une racine : sans casse ni barre finale (« C:\ » et « c: » sont la même cible).
+pub fn root_key(root: &str) -> String {
+    root.trim_end_matches('\\').to_lowercase()
+}
+
+/// Nom du fichier d'une racine (empreinte FNV-1a de sa clé).
+fn file_name(root: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in root_key(root).bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("scan_{h:016x}.tsv")
+}
+
+fn scans_dir() -> Option<PathBuf> {
+    Some(data_dir()?.join("scans"))
+}
+
+/// En-tête et totaux de la racine (deux premières lignes du fichier).
+pub fn read_info(text_start: &str) -> Option<SavedInfo> {
+    let mut lines = text_start.lines();
+    let head: Vec<&str> = lines.next()?.split('\t').collect();
+    if head.len() != 6 || head[0] != MAGIC {
+        return None;
+    }
+    let d: Vec<&str> = lines.next()?.split('\t').collect();
+    if d.len() != 13 || d[0] != "D" || d[1] != "0" {
+        return None;
+    }
+    Some(SavedInfo { root: head[1].to_string(), when: head[2].parse().ok()?, size: d[3].parse().ok()?, alloc: d[4].parse().ok()? })
+}
+
+fn read_head(path: &std::path::Path) -> Option<SavedInfo> {
+    use std::io::{BufRead, BufReader};
+    let mut r = BufReader::new(std::fs::File::open(path).ok()?);
+    let mut text = String::new();
+    for _ in 0..2 {
+        r.read_line(&mut text).ok()?;
+    }
+    read_info(&text)
 }
 
 /// Un nom de fichier Windows ne contient ni tabulation ni saut de ligne ; par prudence on les neutralise.
@@ -138,23 +194,60 @@ pub fn decode(text: &str) -> Option<Saved> {
     Some(Saved { tree, summary, deltas, compared: head[5] == "1", when: head[2].parse().ok()?, elapsed_ms: head[3].parse().ok()?, cancelled: head[4] == "1" })
 }
 
-pub fn save(content: String) {
-    if let Some(p) = path() {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
+/// L'ancien fichier unique (`last_scan.tsv`) rejoint le dossier des analyses.
+fn migrate() {
+    let (Some(data), Some(scans)) = (data_dir(), scans_dir()) else { return };
+    let old = data.join("last_scan.tsv");
+    if !old.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&scans);
+    if let Some(info) = read_head(&old) {
+        let dest = scans.join(file_name(&info.root));
+        if !dest.exists() && std::fs::rename(&old, &dest).is_ok() {
+            return;
         }
-        let _ = std::fs::write(p, content);
+    }
+    // Illisible (ancien format) ou déjà remplacé : il ne sert plus à rien.
+    let _ = std::fs::remove_file(old);
+}
+
+/// Analyses enregistrées, de la plus récente à la plus ancienne.
+pub fn list() -> Vec<SavedInfo> {
+    migrate();
+    let Some(dir) = scans_dir() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<SavedInfo> = entries.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("scan_")).filter_map(|e| read_head(&e.path())).collect();
+    out.sort_by(|a, b| b.when.cmp(&a.when));
+    out
+}
+
+/// Enregistre l'analyse d'une racine, puis oublie les plus anciennes au-delà de `KEEP`.
+pub fn save(root: &str, content: String) {
+    let Some(dir) = scans_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(file_name(root)), content);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("scan_"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, old) in files.into_iter().skip(KEEP) {
+        let _ = std::fs::remove_file(old);
     }
 }
 
-pub fn load() -> Option<Saved> {
-    decode(&std::fs::read_to_string(path()?).ok()?)
+/// Analyse enregistrée d'une racine.
+pub fn load(root: &str) -> Option<Saved> {
+    decode(&std::fs::read_to_string(scans_dir()?.join(file_name(root))).ok()?)
 }
 
-/// Oublie la dernière analyse (bouton « Effacer les résultats »).
-pub fn delete() {
-    if let Some(p) = path() {
-        let _ = std::fs::remove_file(p);
+/// Oublie l'analyse enregistrée d'une racine (bouton « Effacer les résultats »).
+pub fn delete(root: &str) {
+    if let Some(dir) = scans_dir() {
+        let _ = std::fs::remove_file(dir.join(file_name(root)));
     }
 }
 
@@ -201,6 +294,18 @@ mod tests {
         assert_eq!(encode(&s.tree, &s.summary, &s.deltas, s.compared, s.when, s.elapsed_ms, s.cancelled), text);
         // Et l'arbre réduit aux dossiers s'enregistre comme l'arbre complet.
         assert_eq!(encode(&t.dirs_only(), &summary, &HashMap::new(), false, 1, 2, false), encode(&t, &summary, &HashMap::new(), false, 1, 2, false));
+    }
+
+    #[test]
+    fn cles_et_index() {
+        assert_eq!(root_key(r"C:\"), root_key("c:"));
+        assert_eq!(file_name(r"C:\"), file_name("c:"));
+        assert_ne!(file_name(r"C:\Users"), file_name(r"C:\Users2"));
+        let (t, _) = sample();
+        let text = encode(&t, &t.summarize(1, false), &HashMap::new(), false, 1_700_000_000, 10, false);
+        let info = read_info(&text).unwrap();
+        assert_eq!(info, SavedInfo { root: r"C:\data".into(), when: 1_700_000_000, size: 5137, alloc: 16384 });
+        assert!(read_info("diskscan-scan-1\tC:\\x\t1\t2\t0\t0\n").is_none());
     }
 
     #[test]

@@ -132,6 +132,8 @@ pub struct Row {
 pub struct DiskScanApp {
     pub s: Settings,
     pub drives: Vec<Drive>,
+    /// Analyses enregistrées (une par lecteur ou dossier), de la plus récente à la plus ancienne.
+    pub saved: Vec<history::SavedInfo>,
     drives_rx: Option<Receiver<Vec<Drive>>>,
     pub tree: Tree,
     /// Une analyse (en cours, terminée ou rechargée) est affichée.
@@ -255,6 +257,7 @@ impl DiskScanApp {
             s,
             drives: Vec::new(),
             drives_rx: None,
+            saved: Vec::new(),
             tree: Tree::new(""),
             has_data: false,
             loaded: false,
@@ -303,7 +306,13 @@ impl DiskScanApp {
             script: crate::demo::Script::from_env(),
         };
         app.refresh_drives(&cc.egui_ctx);
-        app.load_last_scan();
+        app.saved = history::list();
+        // Au lancement : l'analyse de la cible mémorisée, sinon la plus récente.
+        let target = normalize_target(&app.s.target).ok();
+        let root = target.filter(|t| app.saved_info(t).is_some()).or_else(|| app.saved.first().map(|i| i.root.clone()));
+        if let Some(root) = root {
+            app.show_saved(&root);
+        }
         app
     }
 
@@ -329,12 +338,36 @@ impl DiskScanApp {
         }
     }
 
-    // -- Dernière analyse (disque) ------------------------------------------
+    // -- Analyses enregistrées (disque) -------------------------------------
 
-    /// Recharge la dernière analyse : elle reste consultable (dossiers seulement) et sert
-    /// de référence pour repérer ce qui a grossi ou diminué à l'analyse suivante.
-    fn load_last_scan(&mut self) {
-        let Some(saved) = history::load() else { return };
+    /// Analyse enregistrée d'une racine, s'il y en a une.
+    pub fn saved_info(&self, root: &str) -> Option<&history::SavedInfo> {
+        let key = history::root_key(root);
+        self.saved.iter().find(|i| history::root_key(&i.root) == key)
+    }
+
+    /// L'analyse affichée porte-t-elle sur cette racine ?
+    pub fn showing(&self, root: &str) -> bool {
+        self.has_data && history::root_key(&self.tree.root_path) == history::root_key(root)
+    }
+
+    /// Affiche l'analyse enregistrée d'une racine : consultable (dossiers seulement), elle sert
+    /// aussi de référence pour repérer ce qui a grossi ou diminué à l'analyse suivante.
+    fn show_saved(&mut self, root: &str) -> bool {
+        let Some(saved) = history::load(root) else {
+            // Fichier disparu ou illisible : la tuile ne doit plus l'annoncer.
+            let key = history::root_key(root);
+            self.saved.retain(|i| history::root_key(&i.root) != key);
+            return false;
+        };
+        self.expanded.clear();
+        self.selected = None;
+        self.menu_target = None;
+        self.confirm_trash = None;
+        self.map_root = Tree::ROOT;
+        self.map_cache = None;
+        self.prev = None;
+        self.drive_used = None;
         self.tree = saved.tree;
         self.summary = saved.summary;
         self.deltas = saved.deltas;
@@ -349,13 +382,24 @@ impl DiskScanApp {
         self.data_rev += 1;
         self.summary_msg = Some((
             MsgKind::Info,
-            format!("Analyse du {} rechargée : dossiers seulement. Relancez l'analyse (F5) pour le détail des fichiers.", fmt::date_time(self.when)),
+            format!(
+                "Analyse de {} du {} rechargée : dossiers seulement. Relancez l'analyse (F5) pour le détail des fichiers.",
+                self.tree.root_path,
+                fmt::date_time(self.when)
+            ),
         ));
+        true
     }
 
-    fn save_last_scan(&self) {
+    fn save_last_scan(&mut self) {
+        let root = self.tree.root_path.clone();
         let content = history::encode(&self.tree, &self.summary, &self.deltas, self.compared, self.when, self.elapsed.as_millis() as u64, false);
-        std::thread::spawn(move || history::save(content));
+        let r = self.tree.node(Tree::ROOT);
+        let info = history::SavedInfo { root: root.clone(), when: self.when, size: r.size, alloc: r.alloc };
+        let key = history::root_key(&root);
+        self.saved.retain(|i| history::root_key(&i.root) != key);
+        self.saved.insert(0, info);
+        std::thread::spawn(move || history::save(&root, content));
     }
 
     /// Mémorise taille, position et état « agrandi » pour le prochain lancement.
@@ -480,10 +524,19 @@ impl DiskScanApp {
                 return;
             }
         };
-        // L'analyse affichée, si elle est complète, devient la référence de comparaison.
-        if self.has_data && self.end == Some(ScanEnd::Done) {
-            self.prev = Some(self.tree.dirs_only());
-        }
+        // Référence de comparaison : l'analyse affichée si elle porte sur la même cible,
+        // sinon l'analyse enregistrée de cette cible, sinon l'analyse affichée (si l'une
+        // des deux racines contient l'autre, la comparaison porte sur la partie commune).
+        let complete = self.has_data && self.end == Some(ScanEnd::Done);
+        self.prev = if complete && self.showing(&root) {
+            Some(self.tree.dirs_only())
+        } else if let Some(saved) = history::load(&root) {
+            Some(saved.tree)
+        } else if complete {
+            Some(self.tree.dirs_only())
+        } else {
+            None
+        };
         self.tree = Tree::new(&root);
         self.map = vec![Tree::ROOT];
         self.has_data = true;
@@ -819,7 +872,9 @@ impl DiskScanApp {
         self.end = None;
         self.summary_msg = None;
         self.data_rev += 1;
-        history::delete();
+        history::delete(&self.tree.root_path);
+        let key = history::root_key(&self.tree.root_path);
+        self.saved.retain(|i| history::root_key(&i.root) != key);
         self.message = Some((MsgKind::Info, "Résultats effacés.".into()));
     }
 
@@ -1124,6 +1179,7 @@ impl DiskScanApp {
         }
 
         let mut refresh = false;
+        let mut show: Option<String> = None;
         ui.scope(|ui| {
             // Les champs verrouillés s'estompent vers le fond du panneau.
             ui.visuals_mut().widgets.noninteractive.weak_bg_fill = p.sidebar;
@@ -1172,8 +1228,27 @@ impl DiskScanApp {
                 });
                 match &target_st {
                     Ok(path) => {
-                        let what = if self.drives.iter().any(|d| d.root.eq_ignore_ascii_case(path)) { "Lecteur entier" } else { "Dossier prêt à être analysé" };
-                        hint_line(ui, Some((&icons::CHECK, p.ok)), what, p.text3);
+                        let drive = self.drives.iter().any(|d| d.root.eq_ignore_ascii_case(path));
+                        match self.saved_info(path).map(|i| i.when) {
+                            Some(when) => {
+                                let what = if drive { "Lecteur analysé" } else { "Dossier analysé" };
+                                let text = format!("{what} le {}", fmt::date_time(when));
+                                ui.horizontal(|ui| {
+                                    hint_line(ui, Some((&icons::CHECK_CIRCLE, p.ok)), &text, p.ok);
+                                    if !self.showing(path) && !running {
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            if Button::new(Kind::Link, "Afficher").font(regular(12.0)).size(0.0, 20.0).show(ui, p).clicked() {
+                                                show = Some(path.clone());
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+                            None => {
+                                let what = if drive { "Lecteur entier, jamais analysé" } else { "Dossier jamais analysé" };
+                                hint_line(ui, Some((&icons::CHECK, p.text3)), what, p.text3);
+                            }
+                        }
                     }
                     Err(e) => hint_line(ui, Some((&icons::ALERT_CIRCLE, p.err)), e, p.err),
                 }
@@ -1196,18 +1271,28 @@ impl DiskScanApp {
                 let current = target_st.as_deref().unwrap_or("").to_string();
                 let mut picked = None;
                 for d in &self.drives {
-                    if drive_card(ui, p, d, d.root.eq_ignore_ascii_case(&current)).clicked() {
+                    let state = DriveState { selected: d.root.eq_ignore_ascii_case(&current), shown: self.showing(&d.root), when: self.saved_info(&d.root).map(|i| i.when) };
+                    if drive_card(ui, p, d, state).clicked() {
                         picked = Some(d.root.clone());
                     }
                 }
                 if let Some(root) = picked {
-                    self.s.target = root;
+                    self.s.target = root.clone();
                     self.message = None;
+                    // Lecteur déjà analysé : on affiche directement sa dernière analyse.
+                    if !self.showing(&root) && self.saved_info(&root).is_some() {
+                        show = Some(root);
+                    }
                 }
             });
         });
         if refresh {
             self.refresh_drives(ui.ctx());
+        }
+        if let Some(root) = show {
+            if !self.running() && self.show_saved(&root) {
+                self.s.tab = if self.s.tab == Tab::Changes && !self.compared { Tab::Tree } else { self.s.tab };
+            }
         }
         ui.add_space(10.0);
 
@@ -1519,8 +1604,20 @@ fn lock_banner(ui: &mut Ui, p: &Palette) {
     w::text_at(painter, g, rect.left() + 32.0, rect.center().y);
 }
 
-/// Carte d'un lecteur : nom, taux d'occupation, barre, espace libre. Cliquer la choisit comme cible.
-fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, selected: bool) -> egui::Response {
+/// État d'un lecteur dans la liste.
+struct DriveState {
+    /// Cible actuelle.
+    selected: bool,
+    /// Son analyse est affichée.
+    shown: bool,
+    /// Date de sa dernière analyse enregistrée.
+    when: Option<i64>,
+}
+
+/// Carte d'un lecteur : nom, espace libre, barre d'occupation, taille, état de l'analyse.
+/// Un lecteur déjà analysé porte une bande verte à gauche et la date de son analyse.
+fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, st: DriveState) -> egui::Response {
+    let selected = st.selected;
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -1535,6 +1632,10 @@ fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, selected: bool) -> egui::Resp
     };
     let painter = ui.painter();
     painter.rect(rect.shrink(0.5), 6.0, fill, stroke(1.0, line));
+    if st.when.is_some() {
+        let band = Rect::from_min_max(pos2(rect.left() + 1.0, rect.top() + 1.0), pos2(rect.left() + 4.0, rect.bottom() - 1.0));
+        painter.rect_filled(band, egui::Rounding { nw: 5.0, sw: 5.0, ne: 0.0, se: 0.0 }, p.ok);
+    }
     let (left, right) = (rect.left() + 12.0, rect.right() - 12.0);
     let frac = if d.total == 0 { 0.0 } else { (d.used() as f64 / d.total as f64) as f32 };
     let cy = rect.top() + 16.0;
@@ -1548,6 +1649,18 @@ fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, selected: bool) -> egui::Resp
     let track = Rect::from_min_max(pos2(left, rect.top() + 28.0), pos2(right, rect.top() + 33.0));
     let sub = format!("{} · {} occupés", fmt::size(d.total), fmt::percent(frac as f64));
     w::text_at(painter, w::galley(ui, sub, regular(11.0), p.text3), left, rect.top() + 44.0);
+    // État de l'analyse, à droite de la dernière ligne.
+    let (state, color) = match st.when {
+        Some(when) if st.shown => (format!("affiché · {}", short_date(when)), p.ok),
+        Some(when) => (format!("analysé le {}", short_date(when)), p.ok),
+        None => ("jamais analysé".to_string(), p.text3),
+    };
+    let sg = w::galley(ui, state, if st.when.is_some() { semibold(11.0) } else { regular(11.0) }, color);
+    let sw = sg.size().x;
+    w::text_at(painter, sg, right - sw, rect.top() + 44.0);
+    if st.when.is_some() {
+        icons::paint(ui, &icons::CHECK_CIRCLE, w::icon_rect(right - sw - 15.0, rect.top() + 44.0, 11.0), p.ok);
+    }
     painter.rect_filled(track, 2.5, p.track);
     let color = if frac >= 0.95 {
         p.err_fill
@@ -1560,7 +1673,12 @@ fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, selected: bool) -> egui::Resp
         painter.rect_filled(Rect::from_min_size(track.min, vec2((track.width() * frac).max(5.0), 5.0)), 2.5, color);
     }
     if enabled {
-        let tip = format!("Analyser {} — {} occupés ({}), {} libres sur {}", d.root, fmt::size(d.used()), fmt::percent(frac as f64), fmt::size(d.free), fmt::size(d.total));
+        let mut tip = format!("{} — {} occupés ({}), {} libres sur {}", d.root, fmt::size(d.used()), fmt::percent(frac as f64), fmt::size(d.free), fmt::size(d.total));
+        match st.when {
+            Some(when) if st.shown => tip.push_str(&format!("\nAnalyse du {} affichée. F5 pour l'analyser de nouveau.", fmt::date_time(when))),
+            Some(when) => tip.push_str(&format!("\nDernière analyse : {}. Cliquer pour l'afficher.", fmt::date_time(when))),
+            None => tip.push_str("\nJamais analysé. Cliquer pour le choisir, puis F5."),
+        }
         resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip)
     } else {
         resp
@@ -1603,6 +1721,16 @@ fn option_row(ui: &mut Ui, p: &Palette, on: &mut bool, title: &str, hint: Option
             }
         });
     });
+}
+
+/// « 14/11 15:39 » : date courte d'une analyse (avec l'année si ce n'est pas l'année en cours).
+fn short_date(unix: i64) -> String {
+    use chrono::{Datelike, Local, TimeZone};
+    match Local.timestamp_opt(unix, 0).single() {
+        Some(t) if t.year() == Local::now().year() => t.format("%d/%m %H:%M").to_string(),
+        Some(t) => t.format("%d/%m/%Y").to_string(),
+        None => "—".into(),
+    }
 }
 
 /// Icône de la fenêtre.
