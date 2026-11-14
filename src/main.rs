@@ -8,6 +8,8 @@ mod format;
 mod history;
 mod icon;
 mod icons;
+mod pdf;
+mod report;
 mod scanner;
 mod theme;
 mod tree;

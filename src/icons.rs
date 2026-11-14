@@ -67,7 +67,8 @@ stroke_icon!(ROUTE, "route", "1.9", r#"<circle cx="6" cy="19" r="3"/><path d="M9
 stroke_icon!(POWER, "power", "1.9", r#"<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>"#);
 stroke_icon!(HARD_DRIVE, "hard-drive", "1.9", r#"<path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01M10 16h.01"/>"#);
 stroke_icon!(FILE, "file", "1.9", r#"<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>"#);
-stroke_icon!(FILES, "files", "1.9", r#"<path d="M20 7h-3a2 2 0 0 1-2-2V2"/><path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/><path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/>"#);
+stroke_icon!(FILE_TEXT, "file-text", "1.9", r#"<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8M16 13H8M16 17H8"/>"#);
+stroke_icon!(FILES,"files", "1.9", r#"<path d="M20 7h-3a2 2 0 0 1-2-2V2"/><path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/><path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/>"#);
 stroke_icon!(CHEVRON_RIGHT, "chevron-right", "2.2", r#"<path d="m9 18 6-6-6-6"/>"#);
 stroke_icon!(CHEVRON_DOWN_TREE, "chevron-down-tree", "2.2", r#"<path d="m6 9 6 6 6-6"/>"#);
 stroke_icon!(EXTERNAL, "external", "1.9", r#"<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#);

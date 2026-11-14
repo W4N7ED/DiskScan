@@ -1349,13 +1349,48 @@ impl DiskScanApp {
 
     // -- Barre d'outils : actions qui modifient l'état ------------------------
 
-    pub fn toolbar_actions(&mut self, export: bool, clear: bool) {
+    pub fn toolbar_actions(&mut self, export: bool, pdf: bool, clear: bool) {
         if export {
             self.export_csv();
+        }
+        if pdf {
+            self.export_pdf();
         }
         if clear {
             self.clear_results();
         }
+    }
+
+    // -- Rapport PDF ----------------------------------------------------------
+
+    /// Écrit le rapport PDF de l'analyse affichée.
+    fn write_report(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        if self.summary_dirty {
+            self.refresh_summary();
+        }
+        let bytes = crate::report::render(&self.report_data(), now_unix());
+        std::fs::write(path, bytes)
+    }
+
+    /// Demande où enregistrer le rapport, l'écrit puis l'ouvre dans le lecteur PDF.
+    fn export_pdf(&mut self) {
+        if !self.has_data || self.running() {
+            return;
+        }
+        // « C » pour un lecteur, le nom du dossier sinon.
+        let root = self.tree.root_path.trim_end_matches('\\');
+        let base: String = root.rsplit('\\').next().unwrap_or(root).chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).collect();
+        let name = format!("diskscan_rapport_{}_{}.pdf", base.trim_matches('_'), chrono::Local::now().format("%Y-%m-%d_%H%M"));
+        let Some(path) = rfd::FileDialog::new().set_title("Enregistrer le rapport PDF").add_filter("PDF", &["pdf"]).set_file_name(name).save_file() else {
+            return;
+        };
+        self.message = Some(match self.write_report(&path) {
+            Ok(()) => match win::open(&path.to_string_lossy()) {
+                Ok(()) => (MsgKind::Ok, format!("Rapport PDF enregistré et ouvert : {}", path.display())),
+                Err(e) => (MsgKind::Warn, format!("Rapport PDF enregistré : {} ({e}).", path.display())),
+            },
+            Err(e) => (MsgKind::Err, format!("Rapport PDF non enregistré : {e}")),
+        });
     }
 }
 
@@ -1364,6 +1399,16 @@ impl eframe::App for DiskScanApp {
         self.poll_drives();
         let more = self.poll_scan();
         self.handle_keys(ctx);
+        // Rapports demandés par le script de test (débogage uniquement).
+        #[cfg(debug_assertions)]
+        {
+            let requests = self.script.as_mut().map(|s| std::mem::take(&mut s.pdf)).unwrap_or_default();
+            for path in requests {
+                if let Err(e) = self.write_report(std::path::Path::new(&path)) {
+                    self.message = Some((MsgKind::Err, format!("Rapport non écrit : {e}")));
+                }
+            }
+        }
         if std::mem::take(&mut self.want_start) {
             self.start_scan(ctx);
         }
@@ -1647,7 +1692,7 @@ fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, st: DriveState) -> egui::Resp
     w::text_at(painter, tg, left + 23.0, cy);
     // Barre d'occupation : bleue, orange au-delà de 85 %, rouge au-delà de 95 %.
     let track = Rect::from_min_max(pos2(left, rect.top() + 28.0), pos2(right, rect.top() + 33.0));
-    let sub = format!("{} · {} occupés", fmt::size(d.total), fmt::percent(frac as f64));
+    let sub = format!("{} · {}", fmt::size(d.total), fmt::percent(frac as f64));
     w::text_at(painter, w::galley(ui, sub, regular(11.0), p.text3), left, rect.top() + 44.0);
     // État de l'analyse, à droite de la dernière ligne.
     let (state, color) = match st.when {

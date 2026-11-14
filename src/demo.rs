@@ -6,7 +6,8 @@
 //! ex. `9:click:450,247;10:rclick:450,279;11:move:520,433;12:key:Escape`
 //! Glisser-déposer : `1:down:700,215;1.5:move:500,215;2:up:450,215`
 //! Autres actions : `dclick:x,y` (double-clic), `text:abc` (saisie),
-//! `shot:chemin.bmp` (capture de la fenêtre), `quit` (ferme l'app).
+//! `shot:chemin.bmp` (capture de la fenêtre), `pdf:chemin.pdf` (rapport sans boîte de dialogue),
+//! `quit` (ferme l'app).
 //! Les chemins ne doivent pas contenir de « ; » ; le « : » du lecteur est accepté.
 
 use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput};
@@ -18,6 +19,7 @@ enum Step {
     Key(Key),
     Text(String),
     Shot(String),
+    Pdf(String),
     Quit,
 }
 
@@ -27,6 +29,8 @@ pub struct Script {
     next: usize,
     /// Captures demandées, en attente de l'image renvoyée par eframe.
     shots: Vec<String>,
+    /// Rapports PDF à écrire (sans boîte de dialogue), pris en charge par l'application.
+    pub pdf: Vec<String>,
 }
 
 impl Script {
@@ -72,12 +76,13 @@ impl Script {
                 }
                 "text" => steps.push((t, Step::Text(arg.to_string()))),
                 "shot" => steps.push((t, Step::Shot(arg.to_string()))),
+                "pdf" => steps.push((t, Step::Pdf(arg.to_string()))),
                 "quit" => steps.push((t, Step::Quit)),
                 _ => {}
             }
         }
         steps.sort_by(|a, b| a.0.total_cmp(&b.0));
-        Some(Self { start: Instant::now(), steps, next: 0, shots: Vec::new() })
+        Some(Self { start: Instant::now(), steps, next: 0, shots: Vec::new(), pdf: Vec::new() })
     }
 
     pub fn pending(&self) -> bool {
@@ -120,6 +125,7 @@ impl Script {
                     self.shots.push(path.clone());
                     ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
                 }
+                Step::Pdf(path) => self.pdf.push(path.clone()),
                 Step::Quit => {
                     // On laisse les captures en attente s'écrire avant de fermer.
                     if !self.shots.is_empty() {

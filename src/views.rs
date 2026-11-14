@@ -284,6 +284,57 @@ impl DiskScanApp {
         }
     }
 
+    /// Données du rapport PDF de l'analyse affichée.
+    pub fn report_data(&self) -> crate::report::ReportData {
+        use crate::report::{BigFile, Change, Drive, Item, ReportData};
+        let d = self.s.on_disk;
+        let r = self.tree.node(Tree::ROOT);
+        let drive = self.drives.iter().find(|x| x.root.eq_ignore_ascii_case(&self.tree.root_path)).map(|x| Drive { label: x.title(), total: x.total, free: x.free });
+        let top_level = self
+            .tree
+            .sorted_children(Tree::ROOT, SortKey::Size, false, d, true)
+            .into_iter()
+            .filter(|&c| self.tree.node(c).weight(d) > 0)
+            .map(|c| {
+                let n = self.tree.node(c);
+                Item { name: self.display_name(c), size: n.weight(false), alloc: n.weight(true), is_dir: n.is_dir() || n.has(flag::GROUP) }
+            })
+            .collect();
+        let mut big_files: Vec<BigFile> = self.summary.top.iter().map(|f| BigFile { path: f.path.clone(), size: f.size, alloc: f.alloc, mtime: f.mtime }).collect();
+        big_files.sort_by(|a, b| (if d { b.alloc } else { b.size }).cmp(&(if d { a.alloc } else { a.size })));
+        let mut changes: Vec<Change> = self
+            .deltas
+            .iter()
+            .filter(|(&id, x)| self.valid(id) && (x.new || x.get(d) != 0))
+            .map(|(&id, x)| {
+                let now = self.tree.node(id).weight(d) as i64;
+                let delta = if x.new { now } else { x.get(d) };
+                Change { path: self.tree.path(id), before: now - delta, now, delta, new: x.new }
+            })
+            .collect();
+        changes.sort_by(|a, b| b.delta.abs().cmp(&a.delta.abs()).then_with(|| cmp_names(&a.path, &b.path)));
+        ReportData {
+            root: self.tree.root_path.clone(),
+            when: self.when,
+            elapsed_secs: self.elapsed.as_secs_f32(),
+            cancelled: self.end == Some(ScanEnd::Cancelled),
+            loaded: self.loaded,
+            on_disk: d,
+            size: r.size,
+            alloc: r.alloc,
+            files: r.files as u64,
+            dirs: r.dirs as u64,
+            denied: r.denied as u64,
+            drive,
+            top_level,
+            big_files,
+            exts: self.summary.exts.clone(),
+            ages: self.summary.ages,
+            compared: self.compared,
+            changes,
+        }
+    }
+
     // -- Calcul des tableaux simples ------------------------------------------
 
     fn filter_applies(&self) -> bool {
@@ -647,7 +698,8 @@ impl DiskScanApp {
             Tab::Exts => "Filtrer : extension",
             _ => "Filtrer : chemin",
         };
-        let (mut export, mut clear, mut copy) = (false, false, false);
+        let (mut export, mut clear, mut copy, mut pdf) = (false, false, false, false);
+        let can_report = self.has_data && !self.running();
         let width = ui.available_width();
         ui.allocate_ui_with_layout(vec2(width, 34.0), Layout::right_to_left(Align::Center), |ui| {
             ui.set_min_size(vec2(width, 34.0));
@@ -659,6 +711,10 @@ impl DiskScanApp {
             let r = Button::new(Kind::Secondary, "Exporter CSV").icon(&icons::DOWNLOAD).enabled(has_rows).show(ui, p);
             if r.on_hover_text("Exporter le tableau affiché (séparateur « ; », compatible Excel)").clicked() {
                 export = true;
+            }
+            let r = Button::new(Kind::Secondary, "Rapport PDF").icon(&icons::FILE_TEXT).enabled(can_report).show(ui, p);
+            if r.on_hover_text("Rapport complet de l'analyse : résumé, graphiques, plus gros fichiers, évolution").clicked() {
+                pdf = true;
             }
             let r = Button::new(Kind::Secondary, "Copier").icon(&icons::COPY).enabled(has_rows).show(ui, p);
             if r.on_hover_text("Copier le tableau affiché, prêt à coller dans Excel").clicked() {
@@ -684,7 +740,7 @@ impl DiskScanApp {
             let n = rows.len() as u64;
             acts.push(Act::Copy(fmt::tsv(&h, &rows), format!("Tableau copié dans le presse-papiers : {}, prêt à coller dans Excel.", fmt::plural(n, "ligne", "lignes"))));
         }
-        self.toolbar_actions(export, clear);
+        self.toolbar_actions(export, pdf, clear);
     }
 
     // -- Arborescence ---------------------------------------------------------
@@ -1409,7 +1465,9 @@ impl DiskScanApp {
                     field_row(ui, p, "Taille", &if dup { format!("{} (déjà comptée)", fmt::size(n.size)) } else { fmt::size(n.size) });
                     let mut alloc = fmt::size(n.alloc);
                     if n.size > 0 && n.alloc < n.size / 10 * 9 {
-                        alloc.push_str(" · compressé, creux ou en ligne");
+                        // Fichier compressé, creux ou disponible en ligne seulement : l'économie suffit.
+                        let saved = 1.0 - n.alloc as f64 / n.size as f64;
+                        alloc.push_str(&format!(" (−{})", fmt::percent(saved)));
                     }
                     field_row(ui, p, "Sur le disque", &alloc);
                     if id != Tree::ROOT {

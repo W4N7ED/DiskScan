@@ -209,6 +209,35 @@ pub fn properties(path: &str) -> Result<(), String> {
     }
 }
 
+/// Ouvre un fichier avec son application par défaut (lecteur PDF…).
+pub fn open(path: &str) -> Result<(), String> {
+    const SW_SHOW: i32 = 5;
+    let verb = wide("open");
+    let file = wide(path);
+    let mut info = ShellExecuteInfoW {
+        size: std::mem::size_of::<ShellExecuteInfoW>() as u32,
+        mask: 0,
+        hwnd: 0,
+        verb: verb.as_ptr(),
+        file: file.as_ptr(),
+        parameters: std::ptr::null(),
+        directory: std::ptr::null(),
+        show: SW_SHOW,
+        inst_app: 0,
+        id_list: std::ptr::null_mut(),
+        class: std::ptr::null(),
+        key_class: 0,
+        hot_key: 0,
+        icon: 0,
+        process: 0,
+    };
+    if unsafe { ShellExecuteExW(&mut info) } != 0 {
+        Ok(())
+    } else {
+        Err("aucune application n'est associée à ce type de fichier".into())
+    }
+}
+
 /// Envoie un fichier ou un dossier à la corbeille. Jamais de suppression définitive :
 /// si le lecteur n'a pas de corbeille, rien n'est fait.
 pub fn trash(path: &str) -> Result<(), String> {
