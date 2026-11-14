@@ -1,0 +1,25 @@
+[package]
+name = "diskscan"
+version = "1.0.0"
+edition = "2021"
+description = "Analyseur d'espace disque avec interface graphique (arborescence, carte proportionnelle, comparaison entre analyses)"
+
+[[bin]]
+name = "DiskScan"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.29", features = ["persistence"] }
+egui_extras = { version = "0.29", features = ["svg"] }
+rfd = "0.15"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
