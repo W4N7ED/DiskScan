@@ -579,15 +579,16 @@ impl Tree {
 }
 
 /// Compare deux analyses : écart de taille de chaque dossier de `new` présent dans `old`,
-/// et dossiers nouveaux. Les deux racines peuvent différer si l'une contient l'autre.
-pub fn compare(old: &Tree, new: &Tree) -> HashMap<NodeId, Delta> {
+/// et dossiers nouveaux. Les deux racines peuvent différer si l'une contient l'autre ;
+/// sans rapport entre elles, il n'y a pas de comparaison (`None`).
+pub fn compare(old: &Tree, new: &Tree) -> Option<HashMap<NodeId, Delta>> {
     let mut out = HashMap::new();
     let start = if let Some(o) = old.locate(&new.root_path) {
         (o, Tree::ROOT)
     } else if let Some(n) = new.locate(&old.root_path) {
         (Tree::ROOT, n)
     } else {
-        return out;
+        return None;
     };
     let mut stack = vec![start];
     while let Some((o, n)) = stack.pop() {
@@ -614,7 +615,7 @@ pub fn compare(old: &Tree, new: &Tree) -> HashMap<NodeId, Delta> {
             }
         }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -828,7 +829,7 @@ pub mod tests {
         t.apply_batch(&mut map, DirBatch { id: 1, denied: false, entries: vec![file("c.txt", 1030, 4096, 9000), dir("deep", 3)] });
         t.apply_batch(&mut map, DirBatch { id: 2, denied: false, entries: vec![file("n", 50, 4096, 1)] });
         t.apply_batch(&mut map, DirBatch { id: 3, denied: false, entries: vec![file("d.log", 7, 0, 500)] });
-        let d = compare(&old, &t);
+        let d = compare(&old, &t).unwrap();
         assert_eq!(d[&Tree::ROOT], Delta { size: 1050, alloc: 4096, new: false });
         assert_eq!(d[&map[1]], Delta { size: 1000, alloc: 0, new: false });
         assert_eq!(d[&map[2]], Delta { size: 50, alloc: 4096, new: true });
@@ -840,13 +841,13 @@ pub mod tests {
         let mut m = vec![Tree::ROOT];
         s.apply_batch(&mut m, DirBatch { id: 0, denied: false, entries: vec![file("c.txt", 10, 0, 1), dir("deep", 1)] });
         s.apply_batch(&mut m, DirBatch { id: 1, denied: false, entries: vec![file("d.log", 7, 0, 500)] });
-        let d = compare(&old, &s);
+        let d = compare(&old, &s).unwrap();
         assert_eq!(d[&Tree::ROOT].size, 17 - 37);
         // Et l'inverse : l'ancienne couvrait le sous-dossier.
-        let d = compare(&s.dirs_only(), &t);
+        let d = compare(&s.dirs_only(), &t).unwrap();
         assert_eq!(d[&map[1]].size, 1037 - 17);
         assert!(!d.contains_key(&Tree::ROOT));
-        // Sans rapport : rien.
-        assert!(compare(&Tree::new(r"D:\autre"), &t).is_empty());
+        // Sans rapport : pas de comparaison du tout.
+        assert!(compare(&Tree::new(r"D:\autre"), &t).is_none());
     }
 }

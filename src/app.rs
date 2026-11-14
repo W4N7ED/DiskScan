@@ -603,8 +603,9 @@ impl DiskScanApp {
         self.refresh_summary();
         let complete = !cancelled && self.end == Some(ScanEnd::Done) && !self.loaded;
         if complete {
-            self.deltas = self.prev.as_ref().map(|p| tree::compare(p, &self.tree)).unwrap_or_default();
-            self.compared = self.prev.is_some();
+            let cmp = self.prev.as_ref().and_then(|p| tree::compare(p, &self.tree));
+            self.compared = cmp.is_some();
+            self.deltas = cmp.unwrap_or_default();
             self.save_last_scan();
         }
         self.rows_dirty = true;
@@ -1217,7 +1218,7 @@ impl DiskScanApp {
         w::field_label(ui, p, "Affichage");
         ui.add_space(4.0);
         let before = (self.s.on_disk, self.s.show_files);
-        option_row(ui, p, &mut self.s.on_disk, "Taille occupée sur le disque", Some("clusters, fichiers compressés ou creux"));
+        option_row(ui, p, &mut self.s.on_disk, "Taille occupée sur le disque", Some("clusters ; fichiers compressés, creux ou disponibles en ligne seulement"));
         ui.add_space(4.0);
         option_row(ui, p, &mut self.s.show_files, "Fichiers dans l'arborescence", None);
         if before.0 != self.s.on_disk {
@@ -1521,7 +1522,7 @@ fn lock_banner(ui: &mut Ui, p: &Palette) {
 /// Carte d'un lecteur : nom, taux d'occupation, barre, espace libre. Cliquer la choisit comme cible.
 fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, selected: bool) -> egui::Response {
     let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 46.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
     if !ui.is_rect_visible(rect) {
         return resp;
     }
@@ -1536,15 +1537,17 @@ fn drive_card(ui: &mut Ui, p: &Palette, d: &Drive, selected: bool) -> egui::Resp
     painter.rect(rect.shrink(0.5), 6.0, fill, stroke(1.0, line));
     let (left, right) = (rect.left() + 12.0, rect.right() - 12.0);
     let frac = if d.total == 0 { 0.0 } else { (d.used() as f64 / d.total as f64) as f32 };
-    let cy = rect.top() + 17.0;
+    let cy = rect.top() + 16.0;
     icons::paint(ui, &icons::HARD_DRIVE, w::icon_rect(left, cy, 15.0), if selected { p.accent_text } else { p.text2 });
-    let fg = w::galley(ui, format!("{} libres", fmt::size(d.free)), regular(11.5), p.text3);
+    let fg = w::galley(ui, format!("{} libres", fmt::size(d.free)), regular(11.5), p.text2);
     let fw = fg.size().x;
     w::text_at(painter, fg, right - fw, cy);
     let tg = w::galley_trunc(ui, &d.title(), semibold(13.0), p.text, right - fw - 8.0 - (left + 23.0));
     w::text_at(painter, tg, left + 23.0, cy);
     // Barre d'occupation : bleue, orange au-delà de 85 %, rouge au-delà de 95 %.
-    let track = Rect::from_min_max(pos2(left, rect.top() + 31.0), pos2(right, rect.top() + 36.0));
+    let track = Rect::from_min_max(pos2(left, rect.top() + 28.0), pos2(right, rect.top() + 33.0));
+    let sub = format!("{} · {} occupés", fmt::size(d.total), fmt::percent(frac as f64));
+    w::text_at(painter, w::galley(ui, sub, regular(11.0), p.text3), left, rect.top() + 44.0);
     painter.rect_filled(track, 2.5, p.track);
     let color = if frac >= 0.95 {
         p.err_fill

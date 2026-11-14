@@ -498,7 +498,8 @@ impl DiskScanApp {
             let r = self.tree.node(Tree::ROOT);
             let (v, u) = fmt::size_parts(r.weight(on_disk));
             let sub = match self.drive_used {
-                Some(used) if self.rescan.is_none() => format!("{u} / {} occupés", fmt::size(used)),
+                // Comparable à l'espace occupé du lecteur seulement en taille sur le disque.
+                Some(used) if self.rescan.is_none() && on_disk => format!("{u} / {} occupés", fmt::size(used)),
                 _ => u.to_string(),
             };
             let dirs_sub = if r.denied > 0 { format!("dont {}", fmt::plural(r.denied as u64, "illisible", "illisibles")) } else { String::new() };
@@ -1408,7 +1409,7 @@ impl DiskScanApp {
                     field_row(ui, p, "Taille", &if dup { format!("{} (déjà comptée)", fmt::size(n.size)) } else { fmt::size(n.size) });
                     let mut alloc = fmt::size(n.alloc);
                     if n.size > 0 && n.alloc < n.size / 10 * 9 {
-                        alloc.push_str(" · compressé ou creux");
+                        alloc.push_str(" · compressé, creux ou en ligne");
                     }
                     field_row(ui, p, "Sur le disque", &alloc);
                     if id != Tree::ROOT {
