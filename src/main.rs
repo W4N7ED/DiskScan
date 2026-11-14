@@ -42,6 +42,9 @@ fn main() -> eframe::Result<()> {
             .with_icon(app::app_icon()),
         // L'app mémorise elle-même taille, position et état « agrandi » (voir app.rs).
         persist_window: false,
+        // Tests (débogage) : réglages et analyses dans un dossier à part, voir `demo.rs`.
+        #[cfg(debug_assertions)]
+        persistence_path: demo::data_dir(),
         ..Default::default()
     };
     eframe::run_native(

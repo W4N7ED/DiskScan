@@ -44,6 +44,10 @@ pub struct SavedInfo {
 }
 
 fn data_dir() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(dir) = crate::demo::data_dir() {
+        return Some(dir);
+    }
     eframe::storage_dir("DiskScan")
 }
 

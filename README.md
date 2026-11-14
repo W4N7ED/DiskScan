@@ -54,7 +54,9 @@ Tests : `cargo test` (agrégation des tailles, liens physiques, tri, formats, co
 
 En build de débogage, la variable `DISKSCAN_SCRIPT` rejoue des clics et touches pour tester l'interface sans souris
 (ex. `2:click:485,170;3:shot:carte.bmp;4:quit`, voir `src/demo.rs`). Les coordonnées sont en points depuis le coin
-haut-gauche de la fenêtre ; `shot:` enregistre une capture de la fenêtre, `pdf:` écrit le rapport sans boîte de dialogue et `quit` ferme l'app. Ce code n'est pas compilé en release.
+haut-gauche de la fenêtre ; `shot:` enregistre une capture de la fenêtre, `pdf:` écrit le rapport sans boîte de dialogue et `quit` ferme l'app.
+`DISKSCAN_DATA_DIR` range réglages et analyses dans un autre dossier, et `DISKSCAN_FAKE_DRIVES` remplace la liste des lecteurs
+(ex. `C:\|Windows|476|182;S:\|Données|931|512`, tailles en Go) : c'est ainsi que sont faites les captures de `docs/`, sans rien montrer du vrai PC. Ce code n'est pas compilé en release.
 
 ## Structure
 

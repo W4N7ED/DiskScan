@@ -164,6 +164,28 @@ fn bmp(img: &egui::ColorImage) -> Vec<u8> {
     out
 }
 
+/// `DISKSCAN_DATA_DIR` : réglages et analyses enregistrées dans ce dossier plutôt que dans
+/// `%APPDATA%\DiskScan\data`, pour tester sans toucher aux vraies données.
+pub fn data_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("DISKSCAN_DATA_DIR").map(std::path::PathBuf::from)
+}
+
+/// `DISKSCAN_FAKE_DRIVES` : lecteurs fictifs à la place des vrais (captures d'écran),
+/// ex. `C:\|Windows|476|182;S:\|Données|931|512` (racine, nom, capacité et espace libre en Go).
+pub fn fake_drives() -> Option<Vec<crate::win::Drive>> {
+    let src = std::env::var("DISKSCAN_FAKE_DRIVES").ok()?;
+    let gib = |s: &str| s.trim().parse::<f64>().ok().map(|v| (v * 1024.0 * 1024.0 * 1024.0) as u64);
+    Some(
+        src.split(';')
+            .filter_map(|d| {
+                let f: Vec<&str> = d.split('|').collect();
+                (f.len() == 4).then_some(())?;
+                Some(crate::win::Drive { root: f[0].trim().to_string(), label: f[1].trim().to_string(), total: gib(f[2])?, free: gib(f[3])? })
+            })
+            .collect(),
+    )
+}
+
 pub fn keep_alive(ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(16));
 }

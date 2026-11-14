@@ -323,7 +323,11 @@ impl DiskScanApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(win::drives());
+            #[cfg(debug_assertions)]
+            let list = crate::demo::fake_drives().unwrap_or_else(win::drives);
+            #[cfg(not(debug_assertions))]
+            let list = win::drives();
+            let _ = tx.send(list);
             ctx.request_repaint();
         });
         self.drives_rx = Some(rx);
