@@ -31,6 +31,8 @@ pub struct Entry {
     pub alloc: u64,
     pub mtime: i64,
     pub flags: u8,
+    /// Identifiant de fichier NTFS (0 s'il est inconnu) : repère les liens physiques.
+    pub file_id: u64,
     /// Numéro attribué par le moteur aux sous-dossiers qu'il va parcourir (`NONE` sinon).
     pub id: u32,
 }
@@ -151,6 +153,8 @@ pub struct Tree {
     pub nodes: Vec<Node>,
     /// Chemin complet de la racine (« C:\ », « C:\Users »).
     pub root_path: String,
+    /// Identifiant de fichier NTFS → nœud qui porte sa taille (liens physiques).
+    links: HashMap<u64, NodeId>,
 }
 
 /// Extension en minuscules, point compris (« .txt »), ou `NO_EXT`.
@@ -196,7 +200,7 @@ impl Tree {
             denied: 0,
             flags: flag::DIR | flag::PENDING,
         };
-        Self { nodes: vec![root], root_path: root_path.to_string() }
+        Self { nodes: vec![root], root_path: root_path.to_string(), links: HashMap::new() }
     }
 
     pub const ROOT: NodeId = 0;
@@ -291,9 +295,10 @@ impl Tree {
             self.bubble(dir, 0, 0, 0, 0, 1, 0);
         }
         let (mut size, mut alloc, mut files, mut dirs, mut mtime) = (0i64, 0i64, 0i64, 0i64, 0i64);
+        // Copies déjà comptées ailleurs qui cèdent leur place à une copie de ce dossier.
+        let mut uncount = Vec::new();
         for e in batch.entries {
             let is_dir = e.flags & flag::DIR != 0;
-            let counted = e.flags & flag::DUP == 0;
             let mut flags = e.flags;
             if is_dir {
                 dirs += 1;
@@ -302,10 +307,6 @@ impl Tree {
                 }
             } else {
                 files += 1;
-                if counted {
-                    size += e.size as i64;
-                    alloc += e.alloc as i64;
-                }
                 mtime = mtime.max(e.mtime);
             }
             let node = Node {
@@ -322,6 +323,25 @@ impl Tree {
                 flags,
             };
             let id = self.push(dir, node);
+            if !is_dir && e.file_id != 0 && e.file_id != u64::MAX && flags & flag::DUP == 0 {
+                // Lien physique : un seul des noms du fichier porte sa taille, toujours le même
+                // (le premier chemin dans l'ordre alphabétique), quel que soit l'ordre de lecture.
+                match self.links.get(&e.file_id).copied().filter(|&o| o != id && self.is_under(o, Self::ROOT)) {
+                    Some(other) if cmp_names(&self.path(id), &self.path(other)) == Ordering::Less => {
+                        uncount.push(other);
+                        self.links.insert(e.file_id, id);
+                    }
+                    Some(_) => self.nodes[id as usize].flags |= flag::DUP,
+                    None => {
+                        self.links.insert(e.file_id, id);
+                    }
+                }
+            }
+            let n = &self.nodes[id as usize];
+            if !is_dir && !n.has(flag::DUP) {
+                size += n.size as i64;
+                alloc += n.alloc as i64;
+            }
             if e.id != NONE {
                 let k = e.id as usize;
                 if map.len() <= k {
@@ -331,6 +351,12 @@ impl Tree {
             }
         }
         self.bubble(dir, size, alloc, files, dirs, 0, mtime);
+        for other in uncount {
+            let n = &mut self.nodes[other as usize];
+            n.flags |= flag::DUP;
+            let (sz, al, parent) = (n.size as i64, n.alloc as i64, n.parent);
+            self.bubble(parent, -sz, -al, 0, 0, 0, 0);
+        }
     }
 
     /// Retire un fichier ou un dossier (envoyé à la corbeille) et corrige les totaux.
@@ -361,6 +387,11 @@ impl Tree {
 
     /// Vide un dossier avant de le rescanner : son contenu est retiré des totaux.
     pub fn reset_dir(&mut self, id: NodeId) {
+        // Les anciens enfants sont détachés : ils ne comptent plus comme copies de liens physiques.
+        let old: Vec<NodeId> = self.children(id).collect();
+        for c in old {
+            self.nodes[c as usize].parent = NONE;
+        }
         let n = &mut self.nodes[id as usize];
         let (size, alloc, files, dirs, denied) = (n.size as i64, n.alloc as i64, n.files as i64, n.dirs as i64, n.denied as i64);
         n.first_child = NONE;
@@ -591,10 +622,10 @@ pub mod tests {
     use super::*;
 
     pub fn file(name: &str, size: u64, alloc: u64, mtime: i64) -> Entry {
-        Entry { name: name.into(), size, alloc, mtime, flags: 0, id: NONE }
+        Entry { name: name.into(), size, alloc, mtime, flags: 0, file_id: 0, id: NONE }
     }
     pub fn dir(name: &str, id: u32) -> Entry {
-        Entry { name: name.into(), size: 0, alloc: 0, mtime: 0, flags: flag::DIR, id }
+        Entry { name: name.into(), size: 0, alloc: 0, mtime: 0, flags: flag::DIR, file_id: 0, id }
     }
 
     /// C:\data ─ a.txt (100) · b.bin (5000) · sub ─ c.txt (30) · lien (dup 5000) · deep ─ d.log (7)
@@ -699,6 +730,43 @@ pub mod tests {
         let dup = t.children(map[1]).find(|&c| &*t.node(c).name == "lien").unwrap();
         t.remove(dup);
         assert_eq!((t.node(0).size, t.node(0).files), (5037, 3));
+    }
+
+    /// Deux noms du même fichier : le premier chemin dans l'ordre alphabétique porte la taille,
+    /// quel que soit l'ordre dans lequel les dossiers arrivent.
+    #[test]
+    fn liens_physiques_deterministes() {
+        let linked = |name: &str| {
+            let mut e = file(name, 1000, 4096, 1);
+            e.file_id = 77;
+            e
+        };
+        for order in [[1u32, 2], [2, 1]] {
+            let mut t = Tree::new(r"C:\x");
+            let mut map = vec![Tree::ROOT];
+            t.apply_batch(&mut map, DirBatch { id: 0, denied: false, entries: vec![dir("b", 1), dir("a", 2)] });
+            for k in order {
+                let name = if k == 1 { "dans-b" } else { "dans-a" };
+                t.apply_batch(&mut map, DirBatch { id: k, denied: false, entries: vec![linked(name), file("autre", 10, 10, 1)] });
+            }
+            let (a, b) = (t.node(map[2]), t.node(map[1]));
+            assert_eq!((a.size, b.size), (1010, 10), "ordre {order:?}");
+            assert_eq!((a.files, b.files), (2, 2));
+            assert_eq!(t.node(0).size, 1020);
+            assert_eq!(t.nodes.iter().filter(|n| n.has(flag::DUP)).count(), 1);
+        }
+        // Rescanner le dossier qui porte la taille ne la compte pas deux fois.
+        let mut t = Tree::new(r"C:\x");
+        let mut map = vec![Tree::ROOT];
+        t.apply_batch(&mut map, DirBatch { id: 0, denied: false, entries: vec![dir("a", 1), dir("b", 2)] });
+        t.apply_batch(&mut map, DirBatch { id: 1, denied: false, entries: vec![linked("x")] });
+        t.apply_batch(&mut map, DirBatch { id: 2, denied: false, entries: vec![linked("y")] });
+        let a = map[1];
+        t.reset_dir(a);
+        let mut m2 = vec![a];
+        t.apply_batch(&mut m2, DirBatch { id: 0, denied: false, entries: vec![linked("x")] });
+        assert_eq!(t.node(0).size, 1000);
+        assert_eq!(t.node(a).size, 1000);
     }
 
     #[test]

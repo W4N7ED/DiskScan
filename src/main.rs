@@ -11,6 +11,8 @@ mod icons;
 mod scanner;
 mod theme;
 mod tree;
+mod treemap;
+mod views;
 mod widgets;
 mod win;
 

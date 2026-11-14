@@ -2,7 +2,7 @@
 //! et comparée à la suivante (dossiers qui ont grossi ou diminué).
 //!
 //! Format texte, une ligne par élément, champs séparés par des tabulations :
-//! - en-tête : `diskscan-scan-1`, racine, date, durée (ms), interrompue (0/1)
+//! - en-tête : `diskscan-scan-1`, racine, date, durée (ms), interrompue (0/1), comparée (0/1)
 //! - `D` : un dossier, dans l'ordre de l'arbre (profondeur, nom, taille, taille sur le disque,
 //!   fichiers, dossiers, illisibles, date, indicateurs, écart, écart sur le disque, nouveau)
 //! - `F` : un des plus gros fichiers · `E` : une extension · `A` : une tranche d'ancienneté
@@ -18,6 +18,8 @@ pub struct Saved {
     pub tree: Tree,
     pub summary: Summary,
     pub deltas: HashMap<NodeId, Delta>,
+    /// Les écarts viennent d'une comparaison (vide : aucun changement).
+    pub compared: bool,
     /// Date de l'analyse (secondes Unix).
     pub when: i64,
     pub elapsed_ms: u64,
@@ -37,8 +39,8 @@ fn clean(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
 }
 
-pub fn encode(tree: &Tree, summary: &Summary, deltas: &HashMap<NodeId, Delta>, when: i64, elapsed_ms: u64, cancelled: bool) -> String {
-    let mut out = format!("{MAGIC}\t{}\t{when}\t{elapsed_ms}\t{}\n", clean(&tree.root_path), u8::from(cancelled));
+pub fn encode(tree: &Tree, summary: &Summary, deltas: &HashMap<NodeId, Delta>, compared: bool, when: i64, elapsed_ms: u64, cancelled: bool) -> String {
+    let mut out = format!("{MAGIC}\t{}\t{when}\t{elapsed_ms}\t{}\t{}\n", clean(&tree.root_path), u8::from(cancelled), u8::from(compared));
     let mut stack = vec![(Tree::ROOT, 0u32)];
     while let Some((id, depth)) = stack.pop() {
         let n = tree.node(id);
@@ -79,7 +81,7 @@ pub fn encode(tree: &Tree, summary: &Summary, deltas: &HashMap<NodeId, Delta>, w
 pub fn decode(text: &str) -> Option<Saved> {
     let mut lines = text.lines();
     let head: Vec<&str> = lines.next()?.split('\t').collect();
-    if head.len() != 5 || head[0] != MAGIC {
+    if head.len() != 6 || head[0] != MAGIC {
         return None;
     }
     let mut tree = Tree::new(head[1]);
@@ -133,7 +135,7 @@ pub fn decode(text: &str) -> Option<Saved> {
         return None;
     }
     tree.add_groups();
-    Some(Saved { tree, summary, deltas, when: head[2].parse().ok()?, elapsed_ms: head[3].parse().ok()?, cancelled: head[4] == "1" })
+    Some(Saved { tree, summary, deltas, compared: head[5] == "1", when: head[2].parse().ok()?, elapsed_ms: head[3].parse().ok()?, cancelled: head[4] == "1" })
 }
 
 pub fn save(content: String) {
@@ -168,9 +170,9 @@ mod tests {
         let mut deltas = HashMap::new();
         deltas.insert(map[1], Delta { size: -500, alloc: 4096, new: false });
         deltas.insert(map[3], Delta { size: 7, alloc: 0, new: true });
-        let text = encode(&t, &summary, &deltas, 1_700_000_000, 1234, true);
+        let text = encode(&t, &summary, &deltas, true, 1_700_000_000, 1234, true);
         let s = decode(&text).unwrap();
-        assert_eq!((s.when, s.elapsed_ms, s.cancelled), (1_700_000_000, 1234, true));
+        assert_eq!((s.when, s.elapsed_ms, s.cancelled, s.compared), (1_700_000_000, 1234, true, true));
         assert_eq!(s.tree.root_path, r"C:\data");
 
         // Mêmes totaux, mêmes dossiers, fichiers regroupés.
@@ -196,20 +198,22 @@ mod tests {
         assert_eq!(s.summary.ages, summary.ages);
 
         // Réenregistrer l'arbre rechargé redonne le même texte (aux fichiers près, déjà absents).
-        assert_eq!(encode(&s.tree, &s.summary, &s.deltas, s.when, s.elapsed_ms, s.cancelled), text);
+        assert_eq!(encode(&s.tree, &s.summary, &s.deltas, s.compared, s.when, s.elapsed_ms, s.cancelled), text);
         // Et l'arbre réduit aux dossiers s'enregistre comme l'arbre complet.
-        assert_eq!(encode(&t.dirs_only(), &summary, &HashMap::new(), 1, 2, false), encode(&t, &summary, &HashMap::new(), 1, 2, false));
+        assert_eq!(encode(&t.dirs_only(), &summary, &HashMap::new(), false, 1, 2, false), encode(&t, &summary, &HashMap::new(), false, 1, 2, false));
     }
 
     #[test]
     fn fichiers_invalides() {
         assert!(decode("").is_none());
         assert!(decode("autre chose").is_none());
-        assert!(decode("netscan-scan-1\tx\t1\t2\t0\n").is_none());
+        assert!(decode("netscan-scan-1\tx\t1\t2\t0\t0\n").is_none());
+        // Ancien en-tête (sans le drapeau « comparée ») : refusé plutôt que mal lu.
+        assert!(decode("diskscan-scan-1\tC:\\x\t1\t2\t0\nD\t0\tC:\\x\t10\t10\t1\t0\t0\t5\t0\t0\t0\t0\n").is_none());
         // En-tête seul, sans racine : refusé.
-        assert!(decode("diskscan-scan-1\tC:\\x\t1\t2\t0\n").is_none());
+        assert!(decode("diskscan-scan-1\tC:\\x\t1\t2\t0\t0\n").is_none());
         // Dossier sans parent, ligne tronquée, nombre illisible.
-        let head = "diskscan-scan-1\tC:\\x\t1\t2\t0\nD\t0\tC:\\x\t10\t10\t1\t0\t0\t5\t0\t0\t0\t0\n";
+        let head = "diskscan-scan-1\tC:\\x\t1\t2\t0\t0\nD\t0\tC:\\x\t10\t10\t1\t0\t0\t5\t0\t0\t0\t0\n";
         assert!(decode(head).is_some());
         assert!(decode(&format!("{head}D\t3\ta\t1\t1\t1\t0\t0\t5\t0\t0\t0\t0\n")).is_none());
         assert!(decode(&format!("{head}D\t1\ta\t1\n")).is_none());

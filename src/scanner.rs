@@ -3,10 +3,10 @@
 //! Chaque dossier est lu en un seul appel système par bloc d'entrées
 //! (`GetFileInformationByHandleEx` + `FileIdBothDirectoryInfo`) : nom, taille réelle,
 //! taille allouée, date, attributs et identifiant de fichier arrivent ensemble,
-//! sans ouvrir les fichiers un par un.
+//! sans ouvrir les fichiers un par un. Les liens physiques sont repérés par l'arbre
+//! grâce à l'identifiant de fichier (voir `Tree::apply_batch`).
 
 use crate::tree::{flag, DirBatch, Entry, Tree, NONE};
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -49,24 +49,11 @@ struct Queue {
     active: usize,
 }
 
-/// Nombre de verrous de l'ensemble des fichiers déjà vus (moins d'attente entre threads).
-const SHARDS: usize = 64;
-
 struct Shared {
     queue: Mutex<Queue>,
     wake: Condvar,
     next_id: AtomicU32,
     cancel: Arc<AtomicBool>,
-    /// Identifiants des fichiers déjà comptés : un second nom du même fichier est un lien physique.
-    seen: Vec<Mutex<HashSet<u64>>>,
-}
-
-impl Shared {
-    /// Vrai la première fois qu'un identifiant de fichier est rencontré.
-    fn first_seen(&self, file_id: u64) -> bool {
-        let shard = (file_id.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58) as usize % SHARDS;
-        self.seen[shard].lock().unwrap().insert(file_id)
-    }
 }
 
 /// Nombre de threads conseillé : un par cœur, 16 au plus.
@@ -87,7 +74,6 @@ where
         wake: Condvar::new(),
         next_id: AtomicU32::new(1),
         cancel: cancel.clone(),
-        seen: (0..SHARDS).map(|_| Mutex::new(HashSet::new())).collect(),
     };
     let threads = threads.clamp(1, 64);
     thread::spawn(move || {
@@ -156,7 +142,7 @@ fn read_dir(job: &Job, sh: &Shared, buf: &mut [u64]) -> (DirBatch, Vec<Job>) {
     let mut entries = Vec::new();
     let mut subdirs = Vec::new();
     let ok = sys::list(&job.path, buf, &sh.cancel, |raw| {
-        let mut e = Entry { name: raw.name.into(), size: 0, alloc: 0, mtime: raw.mtime, flags: 0, id: NONE };
+        let mut e = Entry { name: raw.name.into(), size: 0, alloc: 0, mtime: raw.mtime, flags: 0, file_id: 0, id: NONE };
         if raw.dir {
             e.flags |= flag::DIR;
             if raw.link {
@@ -172,9 +158,8 @@ fn read_dir(job: &Job, sh: &Shared, buf: &mut [u64]) -> (DirBatch, Vec<Job>) {
             if raw.link {
                 e.flags |= flag::LINK;
             }
-            if raw.file_id != 0 && raw.file_id != u64::MAX && !sh.first_seen(raw.file_id) {
-                e.flags |= flag::DUP;
-            }
+            // Les liens physiques (même identifiant sous plusieurs noms) sont résolus par l'arbre.
+            e.file_id = raw.file_id;
         }
         entries.push(e);
     });
