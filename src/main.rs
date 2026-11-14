@@ -4,9 +4,13 @@
 mod app;
 #[cfg(debug_assertions)]
 mod demo;
+mod format;
+mod history;
 mod icon;
 mod icons;
+mod scanner;
 mod theme;
+mod tree;
 mod widgets;
 mod win;
 
