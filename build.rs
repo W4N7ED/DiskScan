@@ -53,6 +53,10 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    // L'exe ne garde que le nom de son fichier de débogage, pas le chemin du PC qui l'a compilé.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bins=/PDBALTPATH:%_PDB%");
+    }
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let ico = out.join("diskscan.ico");
     std::fs::write(&ico, make_ico(&[16, 24, 32, 48, 64, 256])).unwrap();

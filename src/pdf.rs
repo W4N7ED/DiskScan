@@ -354,13 +354,13 @@ mod tests {
         let t = truncate("un texte assez long pour être coupé", 10.0, false, 60.0);
         assert!(t.ends_with('…') && width(&t, 10.0, false) <= 60.0);
         assert_eq!(truncate("court", 10.0, false, 60.0), "court");
-        let m = truncate_middle(r"C:\Users\Utilisateur\AppData\Local\Google\fichier.img", 10.0, false, 120.0);
+        let m = truncate_middle(r"C:\Users\Utilisateur\Documents\Archives\fichier.img", 10.0, false, 120.0);
         assert!(m.contains('…') && m.ends_with("img") && width(&m, 10.0, false) <= 120.0, "{m}");
         let lines = wrap("un deux trois quatre cinq six sept huit neuf dix", 10.0, false, 60.0);
         assert!(lines.len() > 1 && lines.iter().all(|l| width(l, 10.0, false) <= 60.0));
         assert_eq!(lines.join(" "), "un deux trois quatre cinq six sept huit neuf dix");
         // Un chemin sans espace plus long que la ligne est coupé, sans rien perdre.
-        let path = r"C:\Users\Utilisateur\AppData\Local\Temp\un\chemin\très\long\sans\espace";
+        let path = r"C:\Users\Utilisateur\Documents\un\chemin\très\long\sans\espace";
         let lines = wrap(&format!("Voir {path} ici"), 10.0, false, 80.0);
         assert!(lines.len() > 2 && lines.iter().all(|l| width(l, 10.0, false) <= 80.0), "{lines:?}");
         assert_eq!(lines.concat().replace(' ', ""), format!("Voir{path}ici"));

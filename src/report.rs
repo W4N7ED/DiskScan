@@ -692,7 +692,7 @@ pub mod tests {
             denied: 351,
             drive: Some(Drive { label: "Disque local (C:)".into(), total: 464 << 30, free: 30 << 30 }),
             top_level: (0..15).map(|k| item(&format!("Dossier {k}"), (600 >> k.min(9)) << 28, k != 3)).collect(),
-            big_files: (0..30).map(|k| BigFile { path: format!(r"C:\Users\Utilisateur\AppData\Local\Google\Play Games\fichier_{k}.img"), size: (80 - k) << 30, alloc: 6 << 30, mtime: 1_700_000_000 }).collect(),
+            big_files: (0..30).map(|k| BigFile { path: format!(r"C:\Users\Utilisateur\Jeux\Archives\fichier_{k}.img"), size: (80 - k) << 30, alloc: 6 << 30, mtime: 1_700_000_000 }).collect(),
             exts: (0..20).map(|k| ExtStat { ext: format!(".e{k}"), files: 100 - k, size: (200 - 9 * k) << 28, alloc: (100 - 4 * k) << 28 }).collect(),
             ages: [
                 AgeStat { files: 10, size: 50 << 30, alloc: 20 << 30 },
@@ -725,7 +725,7 @@ pub mod tests {
         assert!(s2.iter().any(|x| x.contains("« gros.iso »") && x.contains("à la racine du dossier analysé")));
         assert!(s.iter().any(|x| x.contains("Le lecteur est occupé à 93,5") && x.contains("commence à manquer de place")));
         assert!(s.iter().any(|x| x.contains("« Dossier 0 »")));
-        assert!(s.iter().any(|x| x.contains("« fichier_0.img »") && x.contains(r"Users\Utilisateur\AppData")));
+        assert!(s.iter().any(|x| x.contains("« fichier_0.img »") && x.contains(r"Users\Utilisateur\Jeux\Archives")));
         assert!(s.iter().any(|x| x.contains("351 dossiers n'ont pas pu être lus")));
         assert!(s.iter().any(|x| x.contains("1 dossier a grossi, 1 a diminué, 1 est nouveau") && x.contains("La plus forte hausse : Users (+16,0\u{a0}Go)")));
         assert!(s.iter().any(|x| x.contains("depuis plus d'un an")));

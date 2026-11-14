@@ -46,6 +46,10 @@ cargo build --release
 
 L'exécutable est produit dans `target\release\DiskScan.exe`.
 
+> Avant de publier un exécutable : le compilateur y inscrit les chemins des sources, donc le nom de
+> session Windows. Pour les remplacer par `~`, créer un fichier `.cargo\config.toml` (ignoré par git) :
+> `[build]` puis `rustflags = ["--remap-path-prefix=C:\\Users\\<nom>=~"]`.
+
 > Si le dossier du projet a un chemin très long (> 260 caractères avec `target\...`),
 > l'éditeur de liens échoue (LNK1104). Il suffit alors de définir un dossier de sortie court :
 > `set CARGO_TARGET_DIR=C:\build\diskscan`
